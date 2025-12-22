@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm install && node node_modules/.bin/vite build",
-    "preview": "vite preview"
+    "build": "vite build",
+    "preview": "vite preview",
+    "install-deps": "npm install"
   },
   "dependencies": {
     "react": "^18.2.0",
