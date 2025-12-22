@@ -1,508 +1,276 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from enum import Enum
-import time
-import random
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List
+import time
 import os
-import sys
-import json
+import logging
 import requests
-
-# Load environment variables
 from dotenv import load_dotenv
+
+# ------------------------------------------------------------------------------
+# SETUP
+# ------------------------------------------------------------------------------
+
 load_dotenv()
 
-# ============================================================================
-# DATADOG EVENT INTEGRATION (REAL, NOT METRICS)
-# ============================================================================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("sentinel-g")
 
 DATADOG_API_KEY = os.getenv("DATADOG_API_KEY")
-DATADOG_APP_KEY = os.getenv("DATADOG_APP_KEY")
 DATADOG_SITE = os.getenv("DATADOG_SITE", "datadoghq.com")
 
-# ============================================================================
-# DATADOG EVENT INTEGRATION (REAL, NOT METRICS)
-# ============================================================================
+# ------------------------------------------------------------------------------
+# DATADOG INTEGRATION
+# ------------------------------------------------------------------------------
 
-DATADOG_API_KEY = os.getenv("DATADOG_API_KEY")
-DATADOG_APP_KEY = os.getenv("DATADOG_APP_KEY")
-DATADOG_SITE = os.getenv("DATADOG_SITE", "datadoghq.com")
-
-# REPLACE THIS FUNCTION:
-def send_datadog_event(title: str, text: str, tags: List[str]):
-    """Send event to Datadog via REST API"""
-    if not DATADOG_API_KEY or not DATADOG_APP_KEY:
-        print(f"⚠ Datadog credentials not set. Skipping event.")
+def send_datadog_event(
+    title: str,
+    text: str,
+    tags: List[str],
+    priority: str = "normal"
+):
+    if not DATADOG_API_KEY:
         return
-    
+
     try:
-        import requests
-        
-        url = f"https://api.datadoghq.com/api/v1/events"
-        
+        url = f"https://api.{DATADOG_SITE}/api/v1/events"
         headers = {
             "DD-API-KEY": DATADOG_API_KEY,
             "Content-Type": "application/json",
         }
-        
         payload = {
             "title": title,
             "text": text,
             "tags": tags,
             "source_type_name": "sentinel-g",
-            "priority": "normal",
+            "priority": priority,
         }
-        
-        print(f"DEBUG: Sending to {url}")
-        print(f"DEBUG: Payload: {payload}")
-        
-        response = requests.post(url, json=payload, headers=headers, timeout=5)
-        
-        print(f"DEBUG: Response status: {response.status_code}")
-        print(f"DEBUG: Response: {response.text}")
-        
-        if response.status_code == 202:
-            print(f"✓ Datadog Event Created: {title}")
-        else:
-            print(f"⚠ Datadog event failed ({response.status_code}): {response.text}")
+        requests.post(url, json=payload, headers=headers, timeout=5)
     except Exception as e:
-        print(f"⚠ Datadog event failed: {str(e)}")
+        logger.error(f"Datadog error: {str(e)}")
 
+# ------------------------------------------------------------------------------
+# MODELS & CONSTANTS
+# ------------------------------------------------------------------------------
 
-app = FastAPI(title="SENTINEL-G API", version="1.0.0")
-
-# CORS setup
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ============================================================================
-# FAILURE CLASSIFICATION
-# ============================================================================
+class LLMModel(str, Enum):
+    GPT4 = "gpt4"
+    GPT4O = "gpt4o"
+    CLAUDE3 = "claude3"
+    CLAUDE_HAIKU = "claude_haiku"
+    GEMINI = "gemini"
+    GEMINI_FLASH = "gemini_flash"
 
 class FailureClass(str, Enum):
     HALLUCINATION_RISK = "HALLUCINATION_RISK"
     LATENCY_ANOMALY = "LATENCY_ANOMALY"
     COST_EXPLOSION = "COST_EXPLOSION"
-    DIVERSITY_COLLAPSE = "DIVERSITY_COLLAPSE"
-    RETRY_DEPTH_EXCEEDED = "RETRY_DEPTH_EXCEEDED"
-    TOKEN_LIMIT_BREACH = "TOKEN_LIMIT_BREACH"
     CONFIDENCE_DRIFT = "CONFIDENCE_DRIFT"
-    OUTPUT_VARIANCE = "OUTPUT_VARIANCE"
-    TOOL_FAILURE = "TOOL_FAILURE"
-    FREQUENCY_ANOMALY = "FREQUENCY_ANOMALY"
+    DIVERSITY_COLLAPSE = "DIVERSITY_COLLAPSE"
 
+MODEL_SPECS = {
+    LLMModel.GPT4: {"cost": 0.03, "latency": 2340, "confidence": 0.70},
+    LLMModel.GPT4O: {"cost": 0.015, "latency": 1200, "confidence": 0.72},
+    LLMModel.CLAUDE3: {"cost": 0.015, "latency": 1800, "confidence": 0.75},
+    LLMModel.CLAUDE_HAIKU: {"cost": 0.0008, "latency": 900, "confidence": 0.68},
+    LLMModel.GEMINI: {"cost": 0.00175, "latency": 2000, "confidence": 0.70},
+    LLMModel.GEMINI_FLASH: {"cost": 0.00075, "latency": 800, "confidence": 0.68},
+}
 
-# ============================================================================
-# STATE MANAGEMENT
-# ============================================================================
+# ------------------------------------------------------------------------------
+# IN-MEMORY STATE (DEMO SAFE)
+# ------------------------------------------------------------------------------
 
-incidents_db: Dict[str, dict] = {}
-resolved_incidents: List[dict] = []
+INCIDENTS: Dict[str, dict] = {}
+RESOLVED: List[dict] = []
 
+# ------------------------------------------------------------------------------
+# CORE LOGIC
+# ------------------------------------------------------------------------------
 
-# ============================================================================
-# DETERMINISTIC FAILURE CLASSIFIER
-# ============================================================================
+def classify_failure(failure_type: str, model: LLMModel) -> dict:
+    base = MODEL_SPECS[model]
 
-def classify_failure(failure_type: str) -> Dict:
-    """Classify failure deterministically"""
-    
-    classifications = {
-        "hallucination": {
-            "primary_class": FailureClass.HALLUCINATION_RISK,
+    if failure_type == "hallucination":
+        return {
+            "class": FailureClass.HALLUCINATION_RISK,
             "confidence": 0.52,
-            "latency_ms": 3200,
-            "tokens_output": 320,
+            "latency": base["latency"] * 1.4,
             "diversity": 0.45,
-        },
-        "latency": {
-            "primary_class": FailureClass.LATENCY_ANOMALY,
+        }
+
+    if failure_type == "latency":
+        return {
+            "class": FailureClass.LATENCY_ANOMALY,
             "confidence": 0.68,
-            "latency_ms": 4500,
-            "tokens_output": 220,
+            "latency": base["latency"] * 1.9,
             "diversity": 0.70,
-        },
-        "cost": {
-            "primary_class": FailureClass.COST_EXPLOSION,
+        }
+
+    if failure_type == "cost":
+        return {
+            "class": FailureClass.COST_EXPLOSION,
             "confidence": 0.65,
-            "latency_ms": 2800,
-            "tokens_output": 520,
-            "diversity": 0.65,
-        },
+            "latency": base["latency"] * 1.2,
+            "diversity": 0.66,
+        }
+
+    return classify_failure("hallucination", model)
+
+def calculate_business_impact(confidence: float) -> dict:
+    hourly_revenue = 24333
+    hours_exposed = 8
+    severity = max(0.15, 1 - confidence)
+
+    loss = hourly_revenue * hours_exposed * severity
+
+    return {
+        "projected_24h_loss": round(loss),
+        "conversion_loss": round(loss * 0.63),
+        "refund_costs": round(loss * 0.24),
+        "support_overhead": round(loss * 0.13),
     }
-    
-    return classifications.get(failure_type, classifications["hallucination"])
 
-
-def build_failure_lineage(failure_type: str) -> List[Dict]:
-    """Build temporal degradation story"""
-    now = datetime.utcnow()
+def recovery_playbook(failure: FailureClass, model: LLMModel) -> List[dict]:
     return [
         {
-            "timestamp": (now - timedelta(minutes=12)).isoformat(),
-            "time_marker": "t-12m",
-            "signal": "confidence_drift_begins",
-            "value": 0.52,
-            "description": "Confidence threshold approaching",
+            "action": "Switch to Gemini 1.5 Flash",
+            "target_model": "gemini_flash",
+            "success_rate": 0.9,
+            "execution_time_sec": 120,
+            "roi": "High",
         },
         {
-            "timestamp": (now - timedelta(minutes=6)).isoformat(),
-            "time_marker": "t-6m",
-            "signal": "token_spike",
-            "value": 320.00,
-            "description": "Output tokens increasing",
+            "action": "Enable response streaming",
+            "target_model": model.value,
+            "success_rate": 0.8,
+            "execution_time_sec": 300,
+            "roi": "Medium",
         },
         {
-            "timestamp": (now - timedelta(minutes=2)).isoformat(),
-            "time_marker": "t-2m",
-            "signal": "latency_acceleration",
-            "value": 3200.00,
-            "description": "Response time degradation",
-        },
-        {
-            "timestamp": now.isoformat(),
-            "time_marker": "t+0m",
-            "signal": "failure_triggered",
-            "value": 0.78,
-            "description": "HALLUCINATION_RISK detected",
+            "action": "Increase confidence threshold",
+            "target_model": model.value,
+            "success_rate": 0.7,
+            "execution_time_sec": 60,
+            "roi": "Medium",
         },
     ]
 
+# ------------------------------------------------------------------------------
+# FASTAPI APP
+# ------------------------------------------------------------------------------
 
-def calculate_business_impact(classification: Dict) -> Dict:
-    """Calculate business impact deterministically"""
-    
-    base_hourly_revenue = 24333  # $583K/day
-    hours_undetected = 8
-    
-    confidence = classification["confidence"]
-    latency = classification["latency_ms"]
-    
-    severity = 1.0 - confidence
-    if latency > 3000:
-        severity = min(1.0, severity + 0.15)
-    
-    projected_24h_lost = base_hourly_revenue * hours_undetected * severity
-    
-    return {
-        "base_hourly_revenue": base_hourly_revenue,
-        "hours_until_detection": hours_undetected,
-        "failure_severity": round(severity, 2),
-        "calculation": {
-            "projected_24h_revenue_lost": round(projected_24h_lost, 0),
-            "conversion_loss": round(projected_24h_lost * 0.63, 0),
-            "refund_costs": round(projected_24h_lost * 0.24, 0),
-            "support_overhead": round(projected_24h_lost * 0.13, 0),
-        },
-    }
+app = FastAPI(
+    title="SENTINEL-G",
+    description="LLM Reliability Control Plane",
+    version="1.1.0",
+)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-def generate_recovery_options(failure_class: str) -> List[Dict]:
-    """Generate ranked recovery actions"""
-    
-    recovery_map = {
-        FailureClass.HALLUCINATION_RISK: [
-            {
-                "rank": 1,
-                "action": "Fallback to Claude 3.5 Sonnet for 30 minutes",
-                "success_rate": 0.85,
-                "execution_time_min": 2,
-            },
-            {
-                "rank": 2,
-                "action": "Add semantic validation layer",
-                "success_rate": 0.70,
-                "execution_time_min": 30,
-            },
-            {
-                "rank": 3,
-                "action": "Increase confidence threshold to 0.80",
-                "success_rate": 0.65,
-                "execution_time_min": 5,
-            },
-        ],
-        FailureClass.COST_EXPLOSION: [
-            {
-                "rank": 1,
-                "action": "Switch to Gemini 1.5 Flash (cheaper model)",
-                "success_rate": 0.82,
-                "execution_time_min": 3,
-            },
-            {
-                "rank": 2,
-                "action": "Enable prompt caching",
-                "success_rate": 0.75,
-                "execution_time_min": 15,
-            },
-            {
-                "rank": 3,
-                "action": "Reduce context window to 2K tokens",
-                "success_rate": 0.60,
-                "execution_time_min": 2,
-            },
-        ],
-        FailureClass.LATENCY_ANOMALY: [
-            {
-                "rank": 1,
-                "action": "Enable response streaming",
-                "success_rate": 0.80,
-                "execution_time_min": 5,
-            },
-            {
-                "rank": 2,
-                "action": "Switch to faster model variant",
-                "success_rate": 0.72,
-                "execution_time_min": 2,
-            },
-            {
-                "rank": 3,
-                "action": "Increase timeout threshold to 5s",
-                "success_rate": 0.55,
-                "execution_time_min": 1,
-            },
-        ],
-    }
-    
-    return recovery_map.get(failure_class, recovery_map[FailureClass.HALLUCINATION_RISK])
-
-
-# ============================================================================
+# ------------------------------------------------------------------------------
 # ENDPOINTS
-# ============================================================================
+# ------------------------------------------------------------------------------
 
 @app.get("/health")
 def health():
-    """Health check"""
     return {
         "status": "ok",
+        "service": "sentinel-g",
         "timestamp": datetime.utcnow().isoformat(),
     }
 
-
 @app.post("/test-failure")
-def test_failure(failure_type: str = "hallucination"):
-    """
-    Simulate an LLM failure.
-    Triggers Datadog event + local incident.
-    """
-    
-    # Classify
-    classification = classify_failure(failure_type)
-    lineage = build_failure_lineage(failure_type)
-    risk_attribution = calculate_business_impact(classification)
-    recovery_options = generate_recovery_options(classification["primary_class"])
-    
-    # Build incident
+def test_failure(
+    failure_type: str = "hallucination",
+    model: LLMModel = LLMModel.GPT4,
+):
+    classification = classify_failure(failure_type, model)
+    impact = calculate_business_impact(classification["confidence"])
+
     request_id = f"req-{int(time.time() * 1000)}"
+
     incident = {
         "request_id": request_id,
         "timestamp": datetime.utcnow().isoformat(),
-        "failure_type": failure_type,
+        "model": model.value,
         "classification": {
-            "primary_class": classification["primary_class"].value,
+            "primary_class": classification["class"].value,
             "confidence": classification["confidence"],
-            "latency_ms": classification["latency_ms"],
-            "tokens_output": classification["tokens_output"],
+            "latency_ms": round(classification["latency"]),
             "diversity_score": classification["diversity"],
         },
-        "failure_lineage": lineage,
-        "risk_attribution": risk_attribution,
-        "recovery_options": recovery_options,
+        "business_impact": impact,
+        "recovery_options": recovery_playbook(classification["class"], model),
         "status": "ALERT",
     }
-    
-    incidents_db[request_id] = incident
-    
-    # SEND DATADOG EVENT (THIS IS THE KEY)
-    failure_class = classification["primary_class"].value
-    impact_usd = int(risk_attribution["calculation"]["projected_24h_revenue_lost"])
-    
+
+    INCIDENTS[request_id] = incident
+
     send_datadog_event(
-        title=f"🔴 LLM Failure Detected: {failure_class}",
+        title=f"🔴 LLM Failure Detected: {classification['class'].value}",
         text=f"""
-**Failure Class:** {failure_class}
-**Request ID:** {request_id}
-**Confidence Score:** {classification['confidence']} (threshold: 0.70)
-**Latency:** {classification['latency_ms']}ms (threshold: 2340ms)
-**Diversity Score:** {classification['diversity']} (threshold: 0.50)
-
-**Business Impact (24h):** ${impact_usd:,}
-- Conversion Loss: ${int(risk_attribution['calculation']['conversion_loss']):,}
-- Refund Costs: ${int(risk_attribution['calculation']['refund_costs']):,}
-- Support Overhead: ${int(risk_attribution['calculation']['support_overhead']):,}
-
-**Recommended Actions:**
-1. {recovery_options[0]['action']} ({recovery_options[0]['success_rate']*100:.0f}% success)
-2. {recovery_options[1]['action']} ({recovery_options[1]['success_rate']*100:.0f}% success)
-3. {recovery_options[2]['action']} ({recovery_options[2]['success_rate']*100:.0f}% success)
+Request ID: {request_id}
+Model: {model.value}
+Confidence: {classification['confidence']}
+Latency: {round(classification['latency'])}ms
+Projected 24h Impact: ${impact['projected_24h_loss']:,}
 """,
         tags=[
             "service:sentinel-g",
-            "env:dev",
-            f"failure:{failure_class.lower()}",
-            f"impact:high",
-            f"confidence:{classification['confidence']}",
-            f"latency:{classification['latency_ms']}",
+            f"model:{model.value}",
+            f"failure:{classification['class'].value.lower()}",
         ],
+        priority="high",
     )
-    
-    print(f"\n✓ Failure simulated: {failure_type.upper()}")
-    print(f"  Request ID: {request_id}")
-    print(f"  Datadog event triggered")
-    print(f"  Business Impact: ${impact_usd:,}")
-    
-    return incident
 
+    return incident
 
 @app.post("/apply-fix")
 def apply_fix(request_id: str, action: str):
-    """Apply recovery action"""
-    
-    if request_id not in incidents_db:
+    if request_id not in INCIDENTS:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
-    incident = incidents_db[request_id]
-    
-    execution_time = random.randint(2, 15)
-    
-    # Send RECOVERY event to Datadog
-    send_datadog_event(
-        title=f"✓ LLM Recovery Applied: {action}",
-        text=f"""
-**Recovery Action:** {action}
-**Request ID:** {request_id}
-**Execution Time:** {execution_time} seconds
 
-**Recovered Metrics:**
-- Confidence: 0.92 (restored)
-- Latency: 1500ms (normalized)
-- Status: HEALTHY
-
-System returned to operational state.
-""",
-        tags=[
-            "service:sentinel-g",
-            "env:dev",
-            "status:recovery",
-            f"action:{action.lower()}",
-        ],
-    )
-    
+    incident = INCIDENTS[request_id]
     incident["status"] = "HEALTHY"
-    incident["recovery_applied"] = {
-        "action": action,
-        "applied_at": datetime.utcnow().isoformat(),
-        "execution_time_sec": execution_time,
-    }
-    
-    resolved_incidents.append(incident)
-    del incidents_db[request_id]
-    
-    print(f"\n✓ Recovery applied: {action}")
-    print(f"  Datadog recovery event triggered")
-    
+
+    RESOLVED.append(incident)
+
+    send_datadog_event(
+        title=f"✓ Recovery Applied: {action}",
+        text=f"Request ID: {request_id}\nAction: {action}",
+        tags=["service:sentinel-g", "type:recovery"],
+    )
+
     return {
-        "request_id": request_id,
         "status": "HEALTHY",
-        "recovery_action": action,
-        "execution_time_sec": execution_time,
+        "execution_time_sec": 120,
         "confidence_recovered": 0.92,
         "latency_normalized_ms": 1500,
     }
 
-
-@app.get("/incidents")
-def list_incidents():
-    """Get all incidents"""
-    return {
-        "active": list(incidents_db.values()),
-        "resolved": resolved_incidents,
-    }
-
 @app.post("/calculate-cost-savings")
-def calculate_cost_savings_endpoint(current_model: str = "gpt4", recommended_model: str = "gpt4o", monthly_requests: int = 1000000):
-    """Calculate monthly and annual cost savings from model switching"""
-    try:
-        current_specs = MODEL_SPECS.get(LLMModel(current_model), MODEL_SPECS[LLMModel.GPT4])
-        recommended_specs = MODEL_SPECS.get(LLMModel(recommended_model), MODEL_SPECS[LLMModel.GEMINI_FLASH])
-        
-        current_cost_per_1k = current_specs["cost_per_1k"]
-        recommended_cost_per_1k = recommended_specs["cost_per_1k"]
-        
-        # Calculate costs
-        current_monthly_cost = (current_cost_per_1k / 1000) * monthly_requests
-        recommended_monthly_cost = (recommended_cost_per_1k / 1000) * monthly_requests
-        monthly_savings = current_monthly_cost - recommended_monthly_cost
-        annual_savings = monthly_savings * 12
-        savings_percent = ((current_cost_per_1k - recommended_cost_per_1k) / current_cost_per_1k * 100) if current_cost_per_1k > 0 else 0
-        
-        result = {
-            "current_model": current_model,
-            "recommended_model": recommended_model,
-            "current_model_name": current_specs["name"],
-            "recommended_model_name": recommended_specs["name"],
-            "monthly_requests": monthly_requests,
-            "current_cost_per_1k_tokens": current_cost_per_1k,
-            "recommended_cost_per_1k_tokens": recommended_cost_per_1k,
-            "current_monthly_cost": round(current_monthly_cost, 2),
-            "recommended_monthly_cost": round(recommended_monthly_cost, 2),
-            "monthly_savings_usd": round(monthly_savings, 2),
-            "annual_savings_usd": round(annual_savings, 2),
-            "savings_percent": round(savings_percent, 1),
-            "payback_period_days": round((12000 / (monthly_savings + 0.01)), 1) if monthly_savings > 0 else 999,
-            "model_specs": {
-                "current": {
-                    "name": current_specs["name"],
-                    "latency_ms": current_specs["latency_ms"],
-                    "max_tokens": current_specs["max_tokens"],
-                    "confidence_threshold": current_specs["threshold"],
-                },
-                "recommended": {
-                    "name": recommended_specs["name"],
-                    "latency_ms": recommended_specs["latency_ms"],
-                    "max_tokens": recommended_specs["max_tokens"],
-                    "confidence_threshold": recommended_specs["threshold"],
-                }
-            }
-        }
-        
-        # Send to Datadog
-        send_datadog_event(
-            title="💰 Cost Savings Analysis",
-            text=f"Model Switch: {current_model} → {recommended_model}\nMonthly Savings: ${monthly_savings:,.2f}\nAnnual Savings: ${annual_savings:,.2f}",
-            tags=["type:cost_analysis", "service:sentinel-g"],
-            priority="normal"
-        )
-        
-        logger.info(f"Cost savings calculated: ${annual_savings:,.2f}/year")
-        return result
-    except Exception as e:
-        logger.error(f"Cost savings calculation failed: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Calculation failed: {str(e)}")
+def calculate_cost_savings(
+    current_model: LLMModel,
+    recommended_model: LLMModel,
+    monthly_requests: int,
+):
+    current = MODEL_SPECS[current_model]
+    target = MODEL_SPECS[recommended_model]
 
-@app.get("/models")
-def list_models():
-    """Get all available LLM models and their specs"""
-    models = {}
-    for model_enum, specs in MODEL_SPECS.items():
-        models[model_enum.value] = {
-            "name": specs["name"],
-            "cost_per_1k_tokens": specs["cost_per_1k"],
-            "latency_ms": specs["latency_ms"],
-            "max_tokens": specs["max_tokens"],
-            "confidence_threshold": specs["threshold"],
-        }
-    return {"models": models, "total_models": len(models)}
+    current_cost = monthly_requests * current["cost"]
+    target_cost = monthly_requests * target["cost"]
 
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    return {
+        "current_monthly_cost": round(current_cost, 2),
+        "optimized_monthly_cost": round(target_cost, 2),
+        "monthly_savings": round(current_cost - target_cost, 2),
+        "annual_savings": round((current_cost - target_cost) * 12, 2),
+    }
