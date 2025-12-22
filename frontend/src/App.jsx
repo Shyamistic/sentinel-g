@@ -6,6 +6,9 @@ import BusinessImpact from './components/BusinessImpact';
 import RecoveryActions from './components/RecoveryActions';
 import EarlyWarnings from './components/EarlyWarnings';
 
+// Get API URL from environment variable or use Render backend
+const API_URL = import.meta.env.VITE_API_URL || 'https://sentinel-g-api.onrender.com';
+
 export default function App() {
   const [incident, setIncident] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -23,14 +26,19 @@ export default function App() {
     setLoading(true);
     setRecoveredIncident(null);
     try {
-      const response = await fetch(
-        `http://localhost:8000/test-failure?failure_type=${failureType}`,
-        { method: 'POST' }
-      );
+      const url = `${API_URL}/test-failure?failure_type=${failureType}`;
+      console.log('Triggering failure at:', url);
+      
+      const response = await fetch(url, { method: 'POST' });
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      
       const data = await response.json();
+      console.log('Incident received:', data);
       
       // Backend returns incident directly
-      console.log('Incident received:', data);
       setIncident(data);
       setSystemStatus('ALERT');
       showToast(`🔴 ${failureType.toUpperCase()} failure detected`, 'error');
@@ -39,8 +47,8 @@ export default function App() {
       setTimeout(() => setSystemStatus('RECOVERING'), 5000);
       setTimeout(() => setSystemStatus('HEALTHY'), 8000);
     } catch (err) {
-      console.error('Error triggering failure', err);
-      showToast('Failed to trigger failure', 'error');
+      console.error('Error triggering failure:', err);
+      showToast(`Failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -53,10 +61,14 @@ export default function App() {
     setSystemStatus('RECOVERING');
 
     try {
-      const response = await fetch(
-        `http://localhost:8000/apply-fix?request_id=${incident.request_id}&action=${encodeURIComponent(action.action)}`,
-        { method: 'POST' }
-      );
+      const url = `${API_URL}/apply-fix?request_id=${incident.request_id}&action=${encodeURIComponent(action.action)}`;
+      console.log('Applying fix at:', url);
+      
+      const response = await fetch(url, { method: 'POST' });
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
       
       const data = await response.json();
       console.log('Recovery response:', data);
@@ -95,8 +107,8 @@ export default function App() {
         setSystemStatus('ALERT');
       }
     } catch (err) {
-      console.error('Error applying fix', err);
-      showToast('Error applying fix', 'error');
+      console.error('Error applying fix:', err);
+      showToast(`Error: ${err.message}`, 'error');
       setSystemStatus('ALERT');
     } finally {
       setLoading(false);
