@@ -1,4 +1,3 @@
-text
 # SENTINEL-G Architecture
 
 ## System Design
