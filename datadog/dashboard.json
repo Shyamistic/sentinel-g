@@ -1,0 +1,227 @@
+{
+  "title": "SENTINEL-G – LLM Reliability",
+  "description": "Real-time LLM failure detection and business impact quantification",
+  "widgets": [
+    {
+      "definition": {
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:sentinel.llm.confidence{service:sentinel-g}",
+            "display_type": "line",
+            "style": {
+              "line_type": "solid",
+              "line_width": "normal",
+              "palette": "dog_classic"
+            }
+          },
+          {
+            "q": "avg:sentinel.llm.latency{service:sentinel-g}",
+            "display_type": "line",
+            "style": {
+              "line_type": "solid",
+              "line_width": "normal",
+              "palette": "dog_classic"
+            },
+            "yaxis": {
+              "scale": "linear",
+              "side": "right"
+            }
+          }
+        ],
+        "yaxis": {
+          "label": "Confidence Score",
+          "scale": "linear"
+        },
+        "title": "LLM Health: Confidence vs Latency",
+        "show_legend": true,
+        "legend_layout": "horizontal",
+        "legend_columns": ["avg", "min", "max"]
+      },
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 6,
+        "height": 3
+      }
+    },
+    {
+      "definition": {
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:sentinel.early_warning.confidence_drift{service:sentinel-g}",
+            "display_type": "line",
+            "style": { "palette": "warm" }
+          },
+          {
+            "q": "avg:sentinel.early_warning.token_growth{service:sentinel-g}",
+            "display_type": "line",
+            "style": { "palette": "orange" }
+          },
+          {
+            "q": "avg:sentinel.early_warning.latency_accel{service:sentinel-g}",
+            "display_type": "line",
+            "style": { "palette": "red" }
+          }
+        ],
+        "title": "Early Warning Signals (Pre-Failure)",
+        "show_legend": true,
+        "legend_layout": "horizontal",
+        "yaxis": {
+          "label": "Signal Magnitude",
+          "scale": "linear"
+        },
+        "markers": [
+          {
+            "value": "y = 0.5",
+            "label": "Failure Threshold",
+            "display_type": "error dashed"
+          }
+        ]
+      },
+      "layout": {
+        "x": 6,
+        "y": 0,
+        "width": 6,
+        "height": 3
+      }
+    },
+    {
+      "definition": {
+        "type": "query_value",
+        "requests": [
+          {
+            "q": "max:sentinel.business.impact_usd{service:sentinel-g}",
+            "aggregator": "last"
+          }
+        ],
+        "title": "Revenue at Risk (24h)",
+        "precision": 0,
+        "conditional_formats": [
+          {
+            "comparator": ">",
+            "value": 100000,
+            "palette": "red_on_white"
+          },
+          {
+            "comparator": ">",
+            "value": 50000,
+            "palette": "yellow_on_white"
+          },
+          {
+            "comparator": "<=",
+            "value": 50000,
+            "palette": "green_on_white"
+          }
+        ]
+      },
+      "layout": {
+        "x": 0,
+        "y": 3,
+        "width": 3,
+        "height": 2
+      }
+    },
+    {
+      "definition": {
+        "type": "query_value",
+        "requests": [
+          {
+            "q": "sum:sentinel.incident.count{service:sentinel-g}",
+            "aggregator": "last"
+          }
+        ],
+        "title": "Active Incidents",
+        "precision": 0,
+        "conditional_formats": [
+          {
+            "comparator": ">",
+            "value": 3,
+            "palette": "red_on_white"
+          },
+          {
+            "comparator": ">",
+            "value": 1,
+            "palette": "yellow_on_white"
+          },
+          {
+            "comparator": "==",
+            "value": 0,
+            "palette": "green_on_white"
+          }
+        ]
+      },
+      "layout": {
+        "x": 3,
+        "y": 3,
+        "width": 3,
+        "height": 2
+      }
+    },
+    {
+      "definition": {
+        "type": "query_value",
+        "requests": [
+          {
+            "q": "avg:sentinel.failure.recovery_time{service:sentinel-g}",
+            "aggregator": "last"
+          }
+        ],
+        "title": "Mean Recovery Time",
+        "precision": 0,
+        "custom_unit": "ms"
+      },
+      "layout": {
+        "x": 6,
+        "y": 3,
+        "width": 3,
+        "height": 2
+      }
+    },
+    {
+      "definition": {
+        "type": "sunburst",
+        "requests": [
+          {
+            "q": "sum:sentinel.failure.count{service:sentinel-g} by {failure_class}"
+          }
+        ],
+        "title": "Failure Classes Detected"
+      },
+      "layout": {
+        "x": 9,
+        "y": 3,
+        "width": 3,
+        "height": 3
+      }
+    },
+    {
+      "definition": {
+        "type": "list",
+        "requests": [
+          {
+            "query": "service:sentinel-g",
+            "columns": ["timestamp", "failure_class", "failure_score", "revenue_impact"],
+            "sort": "time_desc"
+          }
+        ],
+        "title": "Active LLM Reliability Incidents"
+      },
+      "layout": {
+        "x": 0,
+        "y": 5,
+        "width": 12,
+        "height": 3
+      }
+    }
+  ],
+  "layout_type": "ordered",
+  "template_variables": [
+    {
+      "name": "service",
+      "default": "sentinel-g",
+      "prefix": "service"
+    }
+  ]
+}
