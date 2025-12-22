@@ -427,6 +427,81 @@ def list_incidents():
         "resolved": resolved_incidents,
     }
 
+@app.post("/calculate-cost-savings")
+def calculate_cost_savings_endpoint(current_model: str = "gpt4", recommended_model: str = "gpt4o", monthly_requests: int = 1000000):
+    """Calculate monthly and annual cost savings from model switching"""
+    try:
+        current_specs = MODEL_SPECS.get(LLMModel(current_model), MODEL_SPECS[LLMModel.GPT4])
+        recommended_specs = MODEL_SPECS.get(LLMModel(recommended_model), MODEL_SPECS[LLMModel.GEMINI_FLASH])
+        
+        current_cost_per_1k = current_specs["cost_per_1k"]
+        recommended_cost_per_1k = recommended_specs["cost_per_1k"]
+        
+        # Calculate costs
+        current_monthly_cost = (current_cost_per_1k / 1000) * monthly_requests
+        recommended_monthly_cost = (recommended_cost_per_1k / 1000) * monthly_requests
+        monthly_savings = current_monthly_cost - recommended_monthly_cost
+        annual_savings = monthly_savings * 12
+        savings_percent = ((current_cost_per_1k - recommended_cost_per_1k) / current_cost_per_1k * 100) if current_cost_per_1k > 0 else 0
+        
+        result = {
+            "current_model": current_model,
+            "recommended_model": recommended_model,
+            "current_model_name": current_specs["name"],
+            "recommended_model_name": recommended_specs["name"],
+            "monthly_requests": monthly_requests,
+            "current_cost_per_1k_tokens": current_cost_per_1k,
+            "recommended_cost_per_1k_tokens": recommended_cost_per_1k,
+            "current_monthly_cost": round(current_monthly_cost, 2),
+            "recommended_monthly_cost": round(recommended_monthly_cost, 2),
+            "monthly_savings_usd": round(monthly_savings, 2),
+            "annual_savings_usd": round(annual_savings, 2),
+            "savings_percent": round(savings_percent, 1),
+            "payback_period_days": round((12000 / (monthly_savings + 0.01)), 1) if monthly_savings > 0 else 999,
+            "model_specs": {
+                "current": {
+                    "name": current_specs["name"],
+                    "latency_ms": current_specs["latency_ms"],
+                    "max_tokens": current_specs["max_tokens"],
+                    "confidence_threshold": current_specs["threshold"],
+                },
+                "recommended": {
+                    "name": recommended_specs["name"],
+                    "latency_ms": recommended_specs["latency_ms"],
+                    "max_tokens": recommended_specs["max_tokens"],
+                    "confidence_threshold": recommended_specs["threshold"],
+                }
+            }
+        }
+        
+        # Send to Datadog
+        send_datadog_event(
+            title="💰 Cost Savings Analysis",
+            text=f"Model Switch: {current_model} → {recommended_model}\nMonthly Savings: ${monthly_savings:,.2f}\nAnnual Savings: ${annual_savings:,.2f}",
+            tags=["type:cost_analysis", "service:sentinel-g"],
+            priority="normal"
+        )
+        
+        logger.info(f"Cost savings calculated: ${annual_savings:,.2f}/year")
+        return result
+    except Exception as e:
+        logger.error(f"Cost savings calculation failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Calculation failed: {str(e)}")
+
+@app.get("/models")
+def list_models():
+    """Get all available LLM models and their specs"""
+    models = {}
+    for model_enum, specs in MODEL_SPECS.items():
+        models[model_enum.value] = {
+            "name": specs["name"],
+            "cost_per_1k_tokens": specs["cost_per_1k"],
+            "latency_ms": specs["latency_ms"],
+            "max_tokens": specs["max_tokens"],
+            "confidence_threshold": specs["threshold"],
+        }
+    return {"models": models, "total_models": len(models)}
+
 
 if __name__ == "__main__":
     import uvicorn

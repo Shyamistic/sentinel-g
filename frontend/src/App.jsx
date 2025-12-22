@@ -5,6 +5,7 @@ import IncidentTimeline from './components/IncidentTimeline';
 import BusinessImpact from './components/BusinessImpact';
 import RecoveryActions from './components/RecoveryActions';
 import EarlyWarnings from './components/EarlyWarnings';
+import { CostSavingsCalculator } from './components/CostSavingsCalculator';
 
 // Get API URL from environment variable or use Render backend
 const API_URL = import.meta.env.VITE_API_URL || 'https://sentinel-g-api.onrender.com';
@@ -201,6 +202,7 @@ export default function App() {
       </div>
 
       {/* Metric cards */}
+            {/* Metric cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <MetricsCard
           title="Confidence Score"
@@ -248,9 +250,15 @@ export default function App() {
         />
       </div>
 
+      {/* Cost Savings Calculator - NEW SECTION */}
+      <div className="mb-8">
+        <CostSavingsCalculator />
+      </div>
+
       {/* Recovered incident badge */}
       {recoveredIncident && (
         <div className="mb-8 p-4 bg-gradient-to-r from-green-600/20 to-emerald-600/20 border border-green-500/30 rounded-lg">
+
           <div className="flex items-center">
             <CheckCircle className="w-6 h-6 text-green-400 mr-3" />
             <div>
