@@ -1,6 +1,4 @@
 [build]
+  base = "frontend"
   command = "npm ci && npm run build"
   publish = "dist"
-
-[[context.production.environment]]
-  VITE_API_URL = "https://your-backend-url.onrender.com"
