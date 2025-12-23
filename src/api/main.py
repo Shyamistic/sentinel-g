@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
+import requests
+
 # ============================================================================
 # 1. ENTERPRISE LOGGING & DATADOG SETUP
 # ============================================================================
@@ -88,11 +90,38 @@ resolved_incidents = []
 # ============================================================================
 
 def emit_metric(name: str, value: float, tags: List[str]):
-    if DATADOG_AVAILABLE:
-        try:
-            api.Metric.send(metric=name, points=value, tags=tags, type="gauge")
-        except Exception:
-            pass
+    """Sends metrics directly to Datadog API via HTTP (Bypassing Agent)"""
+    if not DATADOG_API_KEY:
+        return
+
+    # Adjust site if you are in EU (datadoghq.eu) vs US (datadoghq.com)
+    # Defaulting to US based on your screenshots
+    dd_site = os.getenv("DATADOG_SITE", "datadoghq.com") 
+    url = f"https://api.{dd_site}/api/v1/series"
+    
+    headers = {
+        "DD-API-KEY": DATADOG_API_KEY,
+        "Content-Type": "application/json",
+    }
+    
+    payload = {
+        "series": [
+            {
+                "metric": name,
+                "points": [[int(time.time()), value]],
+                "type": "gauge",
+                "tags": tags + ["env:production", "service:sentinel-g-api"]
+            }
+        ]
+    }
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=5)
+        if response.status_code != 202:
+            logger.warning(f"Failed to send metric: {response.text}")
+    except Exception as e:
+        logger.warning(f"Metric Error: {e}")
+        
 
 def calculate_impact(confidence: float, failure_type: str) -> Dict:
     base_revenue = 24333 # Hourly
