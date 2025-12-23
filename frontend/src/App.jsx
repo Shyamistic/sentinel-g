@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { TrendingUp, Zap, Activity, CheckCircle } from 'lucide-react';
+import { TrendingUp, Zap, Activity, CheckCircle, AlertTriangle, ShieldAlert } from 'lucide-react';
 import MetricsCard from './components/MetricsCard';
 import IncidentTimeline from './components/IncidentTimeline';
 import BusinessImpact from './components/BusinessImpact';
@@ -7,7 +7,6 @@ import RecoveryActions from './components/RecoveryActions';
 import EarlyWarnings from './components/EarlyWarnings';
 import { CostSavingsCalculator } from './components/CostSavingsCalculator';
 
-// Get API URL from environment variable or use Render backend
 const API_URL = import.meta.env.VITE_API_URL || 'https://sentinel-g-api.onrender.com';
 
 export default function App() {
@@ -27,28 +26,13 @@ export default function App() {
     setLoading(true);
     setRecoveredIncident(null);
     try {
-      const url = `${API_URL}/test-failure?failure_type=${failureType}`;
-      console.log('Triggering failure at:', url);
-      
-      const response = await fetch(url, { method: 'POST' });
-      
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      
+      const response = await fetch(`${API_URL}/test-failure?failure_type=${failureType}`, { method: 'POST' });
+      if (!response.ok) throw new Error('API Error');
       const data = await response.json();
-      console.log('Incident received:', data);
-      
-      // Backend returns incident directly
       setIncident(data);
       setSystemStatus('ALERT');
-      showToast(`🔴 ${failureType.toUpperCase()} failure detected`, 'error');
-
-      // Auto-recover after 8 seconds for demo
-      setTimeout(() => setSystemStatus('RECOVERING'), 5000);
-      setTimeout(() => setSystemStatus('HEALTHY'), 8000);
+      showToast(`🔴 ${failureType.toUpperCase()} DETECTED`, 'error');
     } catch (err) {
-      console.error('Error triggering failure:', err);
       showToast(`Failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
@@ -57,59 +41,37 @@ export default function App() {
 
   const handleApplyFix = async (action) => {
     if (!incident) return;
-
     setLoading(true);
     setSystemStatus('RECOVERING');
 
     try {
       const url = `${API_URL}/apply-fix?request_id=${incident.request_id}&action=${encodeURIComponent(action.action)}`;
-      console.log('Applying fix at:', url);
-      
       const response = await fetch(url, { method: 'POST' });
-      
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      
       const data = await response.json();
-      console.log('Recovery response:', data);
 
-      // Backend returns status directly
       if (data.status === 'HEALTHY') {
         showToast(`✓ Fix applied: ${action.action}`, 'success');
         
-        // Store the resolved incident
-        setResolvedIncidents([
-          {
+        // Add to history
+        setResolvedIncidents(prev => [{
             action: action.action,
             timestamp: new Date().toLocaleTimeString(),
-            executionTime: data.execution_time_sec,
-            confidenceRecovered: data.confidence_recovered,
-            latencyNormalized: data.latency_normalized_ms,
-          },
-          ...resolvedIncidents,
-        ].slice(0, 5));
+            executionTime: data.execution_time_sec || 2
+        }, ...prev].slice(0, 5));
 
-        // Show recovered state
         setRecoveredIncident({
-          confidence_score: data.confidence_recovered,
-          latency_ms: data.latency_normalized_ms,
+          confidence_score: data.confidence_recovered || 0.98,
+          latency_ms: data.latency_normalized_ms || 1200,
           diversity_score: 0.85,
         });
 
-        // After 3 seconds, clear incident and return to healthy
         setTimeout(() => {
           setIncident(null);
           setRecoveredIncident(null);
           setSystemStatus('HEALTHY');
-        }, 3000);
-      } else {
-        showToast('Failed to apply fix', 'error');
-        setSystemStatus('ALERT');
+        }, 4000);
       }
     } catch (err) {
-      console.error('Error applying fix:', err);
-      showToast(`Error: ${err.message}`, 'error');
       setSystemStatus('ALERT');
     } finally {
       setLoading(false);
@@ -117,185 +79,137 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-8">
-      {/* Toast notification */}
+    <div className="min-h-screen bg-slate-900 text-white p-4 md:p-8 font-sans">
+      
+      {/* Toast Overlay */}
       {toast && (
-        <div
-          className={`fixed top-4 right-4 px-6 py-3 rounded-lg font-bold z-50 transition ${
-            toast.type === 'success'
-              ? 'bg-green-500/20 text-green-400 border border-green-500'
-              : 'bg-red-500/20 text-red-400 border border-red-500'
-          }`}
-        >
+        <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-full font-bold z-50 shadow-2xl transition-all ${
+            toast.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
+          }`}>
           {toast.message}
         </div>
       )}
 
-      {/* Header */}
-      <div className="mb-12">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-teal-400 to-cyan-400 bg-clip-text text-transparent">
-              SENTINEL-G
-            </h1>
-            <p className="text-gray-400 mt-2">
-              LLM Reliability & Business Impact Detection
-            </p>
-          </div>
-          <div
-            className={`px-6 py-3 rounded-lg font-bold text-lg border ${
-              systemStatus === 'HEALTHY'
-                ? 'bg-green-500/20 text-green-400 border-green-500'
-                : systemStatus === 'ALERT'
-                ? 'bg-red-500/20 text-red-400 border-red-500 animate-pulse'
-                : 'bg-yellow-500/20 text-yellow-400 border-yellow-500'
-            }`}
-          >
-            {systemStatus === 'HEALTHY' && '🟢 HEALTHY'}
-            {systemStatus === 'ALERT' && '🔴 ALERT – FAILURE DETECTED'}
-            {systemStatus === 'RECOVERING' && '🟡 RECOVERING'}
-          </div>
+      {/* Header Section */}
+      <header className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 gap-4">
+        <div>
+          <h1 className="text-3xl md:text-5xl font-extrabold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent tracking-tight">
+            SENTINEL-G
+          </h1>
+          <p className="text-slate-400 mt-1 text-sm md:text-base">Reliability Control Plane & Risk Engine</p>
+        </div>
+        
+        <div className={`px-6 py-2 rounded-full font-bold text-sm tracking-wide border backdrop-blur-md transition-all duration-500 ${
+            systemStatus === 'HEALTHY' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/50' :
+            systemStatus === 'ALERT' ? 'bg-red-500/10 text-red-400 border-red-500/50 animate-pulse shadow-[0_0_20px_rgba(239,68,68,0.3)]' :
+            'bg-amber-500/10 text-amber-400 border-amber-500/50'
+          }`}>
+          {systemStatus === 'HEALTHY' && '🟢 SYSTEM OPTIMAL'}
+          {systemStatus === 'ALERT' && '🔴 CRITICAL FAILURE DETECTED'}
+          {systemStatus === 'RECOVERING' && '🟡 EXECUTING RECOVERY...'}
+        </div>
+      </header>
+
+      {/* Controls */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
+        <button onClick={() => triggerFailure('hallucination')} disabled={loading}
+          className="bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-red-500/50 text-white py-3 rounded-xl font-medium transition-all shadow-lg hover:shadow-red-500/10">
+          Trigger Hallucination
+        </button>
+        <button onClick={() => triggerFailure('latency')} disabled={loading}
+          className="bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-orange-500/50 text-white py-3 rounded-xl font-medium transition-all shadow-lg hover:shadow-orange-500/10">
+          Trigger Latency Spike
+        </button>
+        <button onClick={() => triggerFailure('cost')} disabled={loading}
+          className="bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-yellow-500/50 text-white py-3 rounded-xl font-medium transition-all shadow-lg hover:shadow-yellow-500/10">
+          Trigger Cost Surge
+        </button>
+        {/* NEW BUTTON */}
+        <button onClick={() => triggerFailure('injection')} disabled={loading}
+          className="bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-purple-500/50 text-white py-3 rounded-xl font-medium transition-all shadow-lg hover:shadow-purple-500/10 flex items-center justify-center gap-2">
+          <ShieldAlert size={18} /> Sim Security Attack
+        </button>
+      </div>
+
+      {/* Metrics Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <MetricsCard 
+          title="Confidence" 
+          value={recoveredIncident?.confidence_score?.toFixed(2) ?? incident?.classification?.confidence?.toFixed(2) ?? '0.99'} 
+          trend={incident ? 'down' : 'stable'} 
+          threshold="0.70" 
+          icon={<Activity size={20}/>} 
+        />
+        <MetricsCard 
+          title="Latency" 
+          value={recoveredIncident?.latency_ms ?? incident?.classification?.latency_ms ?? 142} 
+          unit="ms" 
+          trend={incident ? 'up' : 'stable'} 
+          threshold="2000ms" 
+          icon={<Zap size={20}/>} 
+        />
+        <MetricsCard 
+          title="Requests/Min" 
+          value="4.2k" 
+          trend="up" 
+          threshold="baseline" 
+          icon={<TrendingUp size={20}/>} 
+        />
+        {/* New "Golden Ratio" Visual */}
+        <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex flex-col justify-between">
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-slate-400 text-xs uppercase tracking-wider">Health Score</span>
+                <span className="text-emerald-400"><CheckCircle size={20} /></span>
+            </div>
+            <div className="text-3xl font-bold text-white">98.4</div>
+            <div className="text-xs text-slate-500 mt-1">Golden Ratio (Q/Cost)</div>
         </div>
       </div>
 
-      {/* Resolved incidents log (top right, compact) */}
+      <div className="mb-8"><CostSavingsCalculator /></div>
+
+      {/* Main Content Area */}
+      {incident && !recoveredIncident && (
+        <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+           {/* Alerts */}
+           <div className="mb-6"><EarlyWarnings incident={incident} /></div>
+
+           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+             <div className="lg:col-span-2 bg-slate-800/50 rounded-xl border border-slate-700 p-1">
+               <IncidentTimeline incident={incident} />
+             </div>
+             <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-1">
+               <BusinessImpact incident={incident} />
+             </div>
+           </div>
+
+           <RecoveryActions incident={incident} onApply={handleApplyFix} />
+        </div>
+      )}
+
+      {/* Mobile-Friendly Resolved History */}
       {resolvedIncidents.length > 0 && (
-        <div className="fixed top-24 right-8 bg-gradient-to-br from-green-900/30 to-green-800/30 border border-green-500/30 rounded-lg p-4 w-80 max-h-40 overflow-y-auto z-40">
-          <div className="flex items-center mb-2">
-            <CheckCircle className="w-4 h-4 text-green-400 mr-2" />
-            <h3 className="text-sm font-bold text-green-400">Resolved Incidents</h3>
-          </div>
-          <div className="space-y-2">
-            {resolvedIncidents.map((r, idx) => (
-              <div key={idx} className="text-xs text-green-300 bg-green-900/20 p-2 rounded">
-                <p className="font-semibold truncate">{r.action}</p>
-                <p className="text-green-400/70">{r.timestamp} • {r.executionTime}s</p>
+        <div className="mt-12 pt-8 border-t border-slate-800">
+          <h3 className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-4 flex items-center gap-2">
+            <CheckCircle size={16} /> Recent Automated Recoveries
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {resolvedIncidents.map((r, i) => (
+              <div key={i} className="bg-emerald-900/10 border border-emerald-500/20 p-3 rounded-lg flex justify-between items-center">
+                <div>
+                  <div className="text-emerald-400 font-medium text-sm">{r.action}</div>
+                  <div className="text-slate-500 text-xs">Auto-executed in {r.executionTime}s</div>
+                </div>
+                <div className="text-slate-600 text-xs font-mono">{r.timestamp}</div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Control panel */}
-      <div className="mb-8 flex flex-wrap gap-4">
-        <button
-          onClick={() => triggerFailure('hallucination')}
-          disabled={loading}
-          className="bg-red-600 hover:bg-red-700 disabled:opacity-50 px-6 py-2 rounded-lg font-bold transition"
-        >
-          Trigger Hallucination
-        </button>
-        <button
-          onClick={() => triggerFailure('latency')}
-          disabled={loading}
-          className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 px-6 py-2 rounded-lg font-bold transition"
-        >
-          Trigger Latency Spike
-        </button>
-        <button
-          onClick={() => triggerFailure('cost')}
-          disabled={loading}
-          className="bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 px-6 py-2 rounded-lg font-bold transition"
-        >
-          Trigger Cost Anomaly
-        </button>
-      </div>
-
-      {/* Metric cards */}
-            {/* Metric cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <MetricsCard
-          title="Confidence Score"
-          value={
-            recoveredIncident?.confidence_score?.toFixed(2) ??
-            incident?.classification?.confidence?.toFixed(2) ?? 
-            '0.81'
-          }
-          unit=""
-          trend={incident ? 'down' : 'stable'}
-          threshold="0.70"
-          icon={<Activity className="w-6 h-6" />}
-        />
-        <MetricsCard
-          title="Latency"
-          value={
-            recoveredIncident?.latency_ms ??
-            incident?.classification?.latency_ms ?? 
-            1704
-          }
-          unit="ms"
-          trend={incident ? 'up' : 'stable'}
-          threshold="2340ms"
-          icon={<TrendingUp className="w-6 h-6" />}
-        />
-        <MetricsCard
-          title="Diversity Score"
-          value={
-            recoveredIncident?.diversity_score?.toFixed(2) ??
-            incident?.classification?.diversity_score?.toFixed(2) ?? 
-            '0.70'
-          }
-          unit=""
-          trend="stable"
-          threshold="0.50"
-          icon={<Zap className="w-6 h-6" />}
-        />
-        <MetricsCard
-          title="Requests"
-          value="50k"
-          unit="/day"
-          trend={incident ? 'up' : 'stable'}
-          threshold="baseline"
-          icon={<TrendingUp className="w-6 h-6" />}
-        />
-      </div>
-
-      {/* Cost Savings Calculator - NEW SECTION */}
-      <div className="mb-8">
-        <CostSavingsCalculator />
-      </div>
-
-      {/* Recovered incident badge */}
-      {recoveredIncident && (
-        <div className="mb-8 p-4 bg-gradient-to-r from-green-600/20 to-emerald-600/20 border border-green-500/30 rounded-lg">
-
-          <div className="flex items-center">
-            <CheckCircle className="w-6 h-6 text-green-400 mr-3" />
-            <div>
-              <p className="text-green-400 font-bold">✓ Recovery Successful</p>
-              <p className="text-green-300 text-sm">System returned to healthy state</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Early warnings */}
-      {incident && !recoveredIncident && <EarlyWarnings incident={incident} />}
-
-      {/* Timeline + business impact */}
-      {incident && !recoveredIncident && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-          <div className="lg:col-span-2">
-            <IncidentTimeline incident={incident} />
-          </div>
-          <div>
-            <BusinessImpact incident={incident} />
-          </div>
-        </div>
-      )}
-
-      {/* Recovery actions */}
-      {incident && !recoveredIncident && (
-        <RecoveryActions incident={incident} onApply={handleApplyFix} />
-      )}
-
-      {/* Footer */}
-      <div className="mt-12 pt-8 border-t border-gray-700 text-center text-gray-500 text-sm">
-        <p>SENTINEL-G v1.0.0 | Real-time LLM Reliability Detection</p>
-        <p className="mt-2">
-          Use the controls above to simulate failures and apply fixes.
-        </p>
-      </div>
+      <footer className="mt-12 text-center text-slate-600 text-xs py-4">
+        SENTINEL-G TITAN ENGINE | Powered by Google Vertex AI & Datadog
+      </footer>
     </div>
   );
 }
